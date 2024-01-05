@@ -1,105 +1,134 @@
 #include <Servo.h>
-#include <Keypad.h>
+#include <RTClib.h>
+#include <Wire.h>
 
-Servo L_Servo;
-Servo R_Servo;
+//SERVO(S)
+Servo Servo;
+int servoState = 0;
+const int servoMin = 30;
+const int servoMax = 180;
 
-const int buttonPin = 2;
-const int U_LED = 51;
-const int L_LED = 53;
-const byte ROWS = 4; // Four rows
-const byte COLS = 4;
-const String PW = "1021";
+//RTC
+RTC_DS3231 rtc;
 
-char keys[ROWS][COLS] = {
-   {'1', '2', '3', 'A'},
-   {'4', '5', '6', 'B'},
-   {'7', '8', '9', 'C'},
-   {'*', '0', '#', 'D'} 
-};
-
-byte rowPins[ROWS] = {22, 24, 26, 28};
-byte colPins[COLS] = {30, 32, 34, 36};
-
-Keypad kpd = Keypad(makeKeymap(keys), rowPins, colPins, ROWS, COLS);
-
-String test_PW = "";
-volatile int buttonState = 0;
-int L_ServoState = 0;
-int R_ServoState = 0;
-int lastButtonState = LOW;
-
+//BUTTON(S)
+const int button = 2; 
+int buttonState = 0;
 volatile bool Interrupt = false;
+unsigned long lastInterrupt;
+
+//LED(S)
+const int greenLED = 4;
+const int redLED = 3;
+
+//MISC
+char receivedChar;
+int lockState;
+const int unlockTime = 25;
+const int lockTime = 0;
+const int locked = 1;
+const int unlocked = 0;
 
 void setup() {
   Serial.begin(9600);
-
-  L_Servo.attach(52);
-  L_Servo.write(180);
-  R_Servo.attach(50);
-  R_Servo.write(180);
-
-  pinMode(buttonPin, INPUT_PULLUP);
-  attachInterrupt(digitalPinToInterrupt(2), buttonPress, CHANGE);
-
-  pinMode(U_LED, OUTPUT);
-  pinMode(L_LED, OUTPUT);
-  digitalWrite(L_LED, HIGH);
-  digitalWrite(U_LED, LOW);
-  
+  Servo.attach(5);
+  pinMode(greenLED, OUTPUT);
+  pinMode(redLED, OUTPUT);
+  pinMode(button, INPUT);
+  attachInterrupt(digitalPinToInterrupt(button), buttonPress, FALLING);
+  Wire.begin();
+  rtc.begin();
+  rtc.adjust(DateTime(F(__DATE__),F(__TIME__)));
+  startUp();
 }
 
 void loop() {
-  if (Interrupt) {
-    rotateServo();
-    Interrupt = false;
-  }
-  char key = kpd.getKey();
-  switch (key) {
+  DateTime now = rtc.now();
 
-    case '*':
-      test_PW = "";
-      Serial.println("Test PW Reset");
+  while (now.hour() >= unlockTime || now.hour() < lockTime){
+    if (Interrupt){
+      rotateServo();
+      Interrupt = false;
       break;
+    } 
 
-    case '#':
-      if (test_PW == PW) {
-        Serial.println("Safe Unlocked!");
-        rotateServo();
-        test_PW = "";
-        Serial.println("Test PW Reset");
+    else if (digitalRead(greenLED) == LOW){
+      blinkLED(redLED);
+      break;
+    }
+
+    else if (digitalRead(greenLED) == HIGH){
+      blinkLED(greenLED);
+      break;
+    }
+  }
+
+  while (now.hour() < unlockTime && now.hour() > lockTime){
+    if (Serial.available() > 0) {
+    receivedChar = Serial.read();
+
+      //Reset
+      if (receivedChar == 'r'){
+        startUp();
+        break;
       }
-      break;
 
-    case NO_KEY:
-      break;
-
-    default: 
-      test_PW += key;
-      Serial.println(test_PW + " KEY = " + key);
-      break;
+      //Lock / Unlock
+      if (receivedChar == 'u' || receivedChar == 'l'){
+        rotateServo();
+        break;
+      }
+    }
+    if (lockState = unlocked) {
+      if (Interrupt) {
+        rotateServo();
+        Interrupt = false;
+        break;
+      }
+    }
   }
-
 }
 
-void buttonPress() {
-  Interrupt = true;
-}
-
-void rotateServo() {
-  L_ServoState = L_Servo.read();
-  R_ServoState = R_Servo.read();
-  if (L_ServoState == 0 && R_ServoState == 0){
-    L_Servo.write(180);
-    R_Servo.write(180);
-    digitalWrite(L_LED, HIGH);
-    digitalWrite(U_LED, LOW);
-  } else if (L_ServoState == 180 && R_ServoState == 180){
-    L_Servo.write(0);
-    R_Servo.write(0);
-    digitalWrite(L_LED, LOW);
-    digitalWrite(U_LED, HIGH);
-  }
+void blinkLED(int pin){
+  digitalWrite(pin, LOW);
+  delay(500);
+  digitalWrite(pin, HIGH);
   delay(500);
 }
 
+void rotateServo() {
+  servoState = Servo.read();
+
+  if (servoState <= servoMin){
+    //UNLOCKING
+    Servo.write(servoMax);
+    digitalWrite(greenLED, HIGH);
+    digitalWrite(redLED, LOW);
+    lockState = unlocked;
+  } 
+
+  else if (servoState == servoMax){
+    //LOCKING
+    Servo.write(servoMin);
+    digitalWrite(redLED, HIGH);
+    digitalWrite(greenLED, LOW);
+    lockState = locked;
+  }
+  Serial.println(lockState);
+  delay(500);
+}
+
+void buttonPress() {
+  if (millis() - lastInterrupt > 500 && Interrupt != true){
+    Interrupt = true;
+    lastInterrupt = millis();
+  }
+}
+
+void startUp(){
+  //LOCKING
+  Servo.write(servoMin);
+  digitalWrite(greenLED, LOW);
+  digitalWrite(redLED, HIGH);
+  lockState = locked;
+}
